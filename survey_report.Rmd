@@ -1,0 +1,654 @@
+---
+title: "The Latin American Data Science and Machine Learning Community"
+author: "Ilan Reinstein"
+date: "11/27/2019"
+output: html_document
+---
+```{r setup, include = F}
+options(mc.cores = parallel::detectCores())
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, cache = T,
+                      message = FALSE, fig.align = "center")
+library(tidyverse)
+library(brms)
+```
+
+In the past years, several well-known investors as well as [AI and Machine Learning experts](https://medium.com/@andrewng/ai-in-latin-america-announcing-our-first-international-office-in-colombia-ac4e203c1564) have found a significant opportunity in [Latin America](https://blogs.iadb.org/bidinvest/en/what-can-latin-america-and-the-caribbean-expect-from-the-machine-learning-revolution/). The subset selected for this analysis consists on all respondents of the survey that are on the Latin American region. The countries that are present in the data are Colombia, Chile, Peru, Argentina, Mexico, and Brazil. There are 1379 respondents from these countries, more than enough to try and identify interesting trends and findings. A good part of this report will be a within-region only analysis, i.e., we will only describe the data at the Latin American region only.
+
+Some of the potential stakeholders of this brief report may be, and is not limited to, some major international investor looking to learn more about the amount of expertise of a specific region before doing an investments; or perhaps this may be of big interest for the Kaggle outreach team, so they may expand their efforts to reach a more diverse audience around the globe. Please keep in mind across this report that the inferences and comments are based on the information provided by the participants and does not pretend to be a comprehensive market analysis of Latin America, nor of the AI landscape in general. This report simply summarizes the state of affairs measured by proxy through the small population that participated in this survey.
+
+We begin with a brief, simple and straightforward exploration of the data, then we'll move on to answer specific questions that are relevant to the Data Science an ML community in Latin America overall as well as for our fictional stakeholders, like what are the factors that explain salary ranges in the region; a question that may be generalizable to the overall global population of data scientists.
+
+On this analysis, we will use the highly flexible and powerful probabilistic programming language, [Stan](https://mc-stan.org) through one of its interfaces into R, [`brms`](https://paul-buerkner.github.io/brms/index.html).
+
+
+```{r load_data}
+
+# Read in data
+multiple_choice <- read_csv("data/raw/multiple_choice_responses.csv", skip = 1)
+latam_countries <- c("Brazil", "Peru", "Mexico", "Argentina", "Colombia", "Chile")
+
+# Subset LATAM
+latam <- multiple_choice %>%
+  filter(`In which country do you currently reside?` %in% latam_countries)
+
+```
+
+# Data exploration
+
+## Number of survey respondents by country
+
+The biggest workforce in the field is in Brazil, followed by Mexico and Colombia. This is a representation of the true population of each of these countries, that is, there is no underlying reason why the distribution of respondents by country is the way it is. See [this reference](https://www.worldometers.info/population/countries-in-latin-america-and-the-caribbean-by-population/) to confirm.
+
+```{r n_latam}
+
+latam %>% 
+  rename(country = `In which country do you currently reside?`) %>%
+  group_by(country) %>% tally() %>%
+  arrange(desc(n)) %>%
+  kableExtra::kable() %>%
+  kableExtra::kable_styling(full_width = F)
+
+```
+
+## What is the distribution of ages in the Latin American DS/ML Community broken down by gender?
+
+```{r ages}
+latam %>% 
+  select(age =`What is your age (# years)?`,
+         gender =`What is your gender? - Selected Choice`) %>%
+  group_by(age, gender) %>% tally() %>%
+  ggplot(aes(age, n, fill = gender)) + geom_bar(stat = "identity", position = "dodge") +
+  scale_fill_brewer(palette = "Set1") + theme_classic() + 
+  theme(axis.text = element_text(size = 10))
+```
+
+These numbers seem to be in accordance with the [worldwide EDA available on Kaggle](https://www.kaggle.com/paultimothymooney/how-to-explore-the-2019-kaggle-survey-data) as part of this competition. The number of women and non-male DS practitioners seems to be quite low not only in this subset region but also across the world. When we analyze gender in the following section we'll try and determine up to what extent gender plays a role, but keep in mind that the small proportion of females to males may lead to biased results.
+
+## What is the highest level of education in the Latin American DS/ML community?
+
+```{r education_level}
+latam %>%
+  select(degree = `What is the highest level of formal education that you have attained or plan to attain within the next 2 years?`) %>%
+  group_by(degree) %>% tally() %>% 
+  arrange(n) %>% drop_na() -> latam_degrees
+  
+latam_degrees$degree <- str_wrap(latam_degrees$degree, 20)
+ggplot(latam_degrees, aes(factor(degree, levels = latam_degrees$degree), n, fill = degree)) +
+  geom_bar(stat = "identity") + theme_classic() +
+  coord_flip() + labs(x = "") + theme(legend.position = "none") + 
+  scale_fill_brewer(palette = "Set2") + 
+  theme(axis.text = element_text(size = 10))
+  
+```
+
+Again, we see there is an agreement with the overall worldwide level data. Most data scientist have at most a master's degree. We will see later when we model salaries, how this plays a role in the overall probability of falling in a specific salary range, i.e., what factors are the most important to determine a better salary.
+
+---
+
+## How experienced is the DS/ML community in Latin America?
+
+As there is no actual years of overall working experience measure in the data, we need to rely on the two questions that give us a proxy of how long has ML been a part of the Latin American market. We have ignored the missing values as well the participants we have not coded before. Perhaps we could have left these two categories untouched, but we assume the missing values are a proxy for no experience as well.
+
+
+
+```{r experience}
+latam %>% 
+  select(year_code = `How long have you been writing code to analyze data (at work or at school)?`) %>%
+  mutate(year_code = if_else(is.na(year_code), "UR", year_code)) %>%
+  mutate(year_code = if_else(year_code == "I have never written code", "never coded", year_code)) %>%
+  group_by(year_code) %>% tally() %>% 
+  arrange(desc(n)) -> years_code
+
+# recode and reorder the levels of experience years
+years_code$year_code <- factor(years_code$year_code, 
+                               levels = c( "< 1 years" ,"1-2 years", "3-5 years",
+                                          "5-10 years", "10-20 years", "20+ years", "never coded","UR"))
+
+
+p1 <- ggplot(filter(years_code, year_code != "UR"), aes(factor(year_code), n)) + 
+  geom_bar(stat = "identity", fill = "skyblue4") + 
+  theme_classic() + labs(x = "Years Coding") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        axis.text = element_text(size = 11))
+
+
+latam %>% select(ml_years = `For how many years have you used machine learning methods?`) %>%
+  mutate(ml_years = if_else(is.na(ml_years), "UR", ml_years)) %>%
+  group_by(ml_years) %>% tally() %>% 
+  arrange(desc(n)) -> ml_years
+  
+# recode and reorder the levels of experience years
+ml_years$ml_years <- factor(ml_years$ml_years, levels = c("< 1 years", "1-2 years", "2-3 years",
+                                                              "3-4 years", "4-5 years", "5-10 years", "10-15 years", 
+                                                              "20+ years", "UR"))
+
+
+p2 <- ggplot(filter(ml_years, ml_years != "UR"), aes(factor(ml_years), n)) + 
+  geom_bar(stat = "identity", fill = "skyblue4") + 
+  theme_classic() + labs(x = "Years using ML")+ 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        axis.text = element_text(size = 11))
+
+
+cowplot::plot_grid(p1, p2, nrow = 1) 
+
+```
+
+This is indeed a young workforce, rich in potential and eager to grow. This may be because in general, Kaggle is a learning platform, so its users are somewhat more on the early-career spectrum. However, there are still a good number of survey participants that have three and above years of experience either doing machine learning or coding for data analysis. 
+
+Now, if indeed the majority of the LatinX community is starting and learning, perhaps it would be of interest to know how Kaggle has impacted their skills' development. Let's see what are the most popular learning platforms in the region.
+
+---
+
+## Most popular learning platform?
+
+```{r learning_platform}
+latam %>%
+  select(contains("courses")) -> platforms
+
+# clean the names of the columns
+names(platforms) <- trimws(gsub(".* - ", "", names(platforms)))
+platform_count <- colSums(!sapply(platforms, is.na))
+
+platforms <- data.frame(N = platform_count, platform = str_wrap(names(platform_count), 30)) %>%
+  arrange(desc(N)) %>% filter(!platform %in% c("Text"))
+
+
+ggplot(platforms, aes(factor(platform, levels = rev(platforms$platform)), N)) + 
+  geom_bar(stat = "identity", fill = "forestgreen") + coord_flip() + labs(x = "Learning Platform") + 
+  theme_classic() + theme(axis.text.y = element_text(vjust = 0.2, face = "bold"),
+                          axis.text.x = element_text(face = "bold", size = 10)) 
+```
+
+Seem to be that Coursera is leading the teaching on Machine Learning and Data Science, it may not come as a surprise since it is the host platform for Andrew Ng's courses, a leading learning resource in the AI world. 
+
+---
+
+Now, out of those survey participants that have a little bit more experience, what are the basic activities that they perform? Note that this question is an important proxy for the actual state of affairs in the ML community, since building AI platforms and services requires a series of steps and milestones to complete before seeing some actual impactful implementation. WE have left out anyone who did not report employers’ activities, as well as those that have not yet implemented ML in their work. The total population then narrows down to only 1070 participants.
+
+
+```{r employers, fig.height=5, fig.width=8}
+latam %>%
+  select(employer = `Does your current employer incorporate machine learning methods into their business?`, 
+         contains("activities"))%>%
+  filter(!is.na(employer)) -> employers
+
+# recode and reorder the levels of implementation
+employers$employer <- doBy::recodeVar(employers$employer, src = unique(employers$employer), 
+                                      tgt = c("< 2 years production", "exploring ML", "not use ML", 
+                                              "insights/not production", "> 2 years production","unknown"))
+
+employers %>%
+  mutate_at(vars(-employer), function(x) if_else(!is.na(x), 1, 0)) -> employers
+
+names(employers) <- gsub(".* - ", "", names(employers))
+
+employers %>%
+  select(-Text) -> employers 
+
+employers %>%
+  group_by(employer) %>%
+  summarise_all(sum) %>%
+  pivot_longer(-employer) %>%
+  mutate(name = str_wrap(name, 35), 
+         employer = str_wrap(employer, 10)) %>%
+  filter(!employer %in% c("unknown", "not use ML")) %>%
+  ggplot(aes(employer, name, fill = value)) + geom_tile()+
+  theme_classic() + scale_fill_distiller(palette = "Spectral", name = "N Participants") + 
+  labs(x = "Employer ML Stage", y = "Type of Activities of Role")
+
+
+```
+
+This is an interesting result, it shows that this is a young market, which has very recently started exploring ML to improve their decision-making processes. This is a great thing for Kaggle or for our fictional investor/VC. Looking at the amount of young talent and interest in DS and ML in the region, no doubt this market seems like a promising opportunity
+Keep in mind that one participant can belong to more than one tile since they may perform several of the activities listed on the _y_-axis. 
+
+Overall in the region we see that there is a lot of exploration of both new applications and prototypes in companies that have less than two years of experience implementing machine learning in their portfolios. This only shows the eagerness to get on board with these methods, but also shows the early stage of the market on average. 
+
+An interesting opportunity arises for investors that have previously helped other companies get in the AI wagon, or even there is huge potential for an education market that helps these newcomers grasp these techniques with hands-on examples and competitions as Kaggle does. 
+
+--- 
+
+## What are the most common job titles among participants in Latin America?
+
+From this young workforce and students, clearly the most common job title among the participants of this survey is Data Scientist, regardless of the level of experience. The next popular title in this region are Software Engineers and Students. This may reflect new interest from experienced developers to learn about machine learning, or perhaps they are involved in different parts of the ML infrastructure within he companies they work for and want to understand better how to build entire frameworks themselves. Finally, the amount of students that replied to the survey only confirms our belief that the participants are a young workforce that may use Kaggle for learning, and applying new concepts to "toy" datasets.
+
+```{r job_titles}
+latam %>%
+  select(job_title = `Select the title most similar to your current role (or most recent title if retired): - Selected Choice`) -> titles
+
+latam %>%
+  select(contains("languages")) -> prog_lang
+names(prog_lang) <- gsub(".* - ", "", names(prog_lang))
+
+
+titles %>% 
+  group_by(job_title) %>%
+  tally() %>% drop_na() %>%
+  arrange(desc(n)) %>%
+  ggplot(aes(factor(job_title, levels = .data$job_title), n)) +
+  geom_bar(stat = "identity", fill = "orangered4") + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text = element_text(size = 11)) +
+  labs(x = "", y = "Count")
+
+
+```
+
+
+---
+
+Finally, we would like to know what are the most popular programming languages among data scientists in the Latin American region. Since these will vary by profession, we need to also include the different job titles. 
+
+
+```{r prog_lang}
+latam %>%
+  select(job_title = `Select the title most similar to your current role (or most recent title if retired): - Selected Choice`) -> titles
+
+latam %>%
+  select(contains("languages")) -> prog_lang
+names(prog_lang) <- gsub(".* - ", "", names(prog_lang))
+
+plot_df <- bind_cols(titles, prog_lang) %>%
+  select(-c(None, Other, Text))
+plot_df %>%
+  mutate_at(vars(-job_title), function(x) if_else(!is.na(x), 1, 0)) %>%
+  pivot_longer(-job_title) %>%
+  group_by(job_title, name) %>%
+  summarise(total = sum(value)) %>%
+  drop_na() %>%
+  ggplot(aes(job_title, name, fill = total)) + geom_tile() + 
+  scale_fill_distiller(direction = -1, palette = "Spectral") + 
+  theme_classic() + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), 
+        axis.text = element_text(size = 10)) + 
+  labs(x = "", y = "")
+
+
+```
+
+As expected, Python is the most popular among Data Scientists, followed by R and SQL. It is also surprising and encouraging to see the diverse toolbox of Data Scientists in general, indeed they are the ones that use the most languages for their profession. This may be a reflection of the early stages of this profession, or even the lack of clear definition of what the role means.
+
+The fact that in the survey there is a high diversity in the roles reported shows that indeed these tools are not only used by "pure data scientist" but in fact we may be inclined to think that merely working with data to generate reports, or to improve old analytic procedures to gain more insight can be considered data science. 
+
+--- 
+
+### Exploratory Remarks
+
+We see that the patterns observed in the plots above have a strong resemblance with the worldwide EDA. There is still however the question of how these variables affect salaries at the regional level. 
+
+# Building a Model for Salary Intervals
+
+Now that we have briefly explored our data, we have an idea of what population we are working with looks like; however, we have not explored for patterns or relationships. This is now the point when we can start asking more insightful questions to better understand the state of the DS/ML community in Latin America. Because it is a young, recently established workforce, we would like to get a sense of how well data scientists are and overall the subset of professional and students compensated for their work, and what are the underlying factors that lead to differences in the compensation levels. We can break down our findings by general demographic information such as age, gender, country of origin and we can include other work-related information like type of work performed, years of coding and ML experience, tool of choice, among others. 
+
+Our response variable is the amount of yearly compensation in USD. The levels of these response are not on a continuous scale; therefore, we need to think a bit more on how we are going to model these observations. This variable is composed of 25 income levels, ranging from 0 USD to almost 500k and over. Assuming or treating this variable as metric (continuous) will lead to errors in our inferences, therefore, we will exploit the categorical nature of the response variable, as well as in the covariates in this survey to fit an ordinal regression using the brms package (cite). The purpose of using a Bayesian model on this analysis is that we can encode our prior beliefs about the different parameters of the model. Consequently, we can then quantify how much uncertainty we have about the current state of affairs of the DS/ML community at the time of the survey, which in my personal case, is quite high. 
+
+The model we present here is a simple ordinal regression that allows us to understand some of the factors captured by the survey impact on the compensation levels/categories. Therefore, our broad question becomes: What are the drivers of difference in compensation within the Latin American data science community? Are there differences in compensation by the different subgroups of the populations?
+
+On the technical aspect, this is an ordinal regression with ordinal and categorical covariates. This regression is based on the vignettes from rstanarm and brms, which you can find [here](http://mc-stan.org/rstanarm/articles/polr.html) and [here](https://cran.r-project.org/web/packages/brms/vignettes/brms_monotonic.html). Following the ideas exposed by [Paul Bürkner](https://paul-buerkner.github.io/brms/articles/brms_monotonic.html) on monotonic effects  and the different ordinal response families that we can use in `brms`, we can try and apply those concepts into our model. 
+
+First, let's have a look at the distribution of frequencies for our response variable. To try and reduce the number of parameters that we need to estimate, and to avoid single participants by band (which may lead to trouble), we are going to aggregate some of the salary bands in order to first, as mentioned, reduce the number of thresholds between each of the intervals, and second, to have a more even distribution of bands by increasing the sample size of those ranges that have only one observation. It will be much easier for our model to try and determine the differences between compensation intervals if they were fewer bands, i.e., classes to estimate.
+
+```{r salary_hit}
+
+salary_levels <- c("$0-999", "1,000-1,999", "2,000-2,999", "3,000-3,999", 
+                   "4,000-4,999", "5,000-7,499", "7,500-9,999",
+                   "10,000-14,999", "15,000-19,999", "20,000-24,999", 
+                   "25,000-29,999", "30,000-39,999","40,000-49,999", 
+                   "50,000-59,999", "60,000-69,999", "70,000-79,999", 
+                   "80,000-89,999", "90,000-99,999", "100,000-124,999",
+                   "125,000-149,999", "150,000-199,999", "200,000-249,999",
+                   "250,000-299,999", "300,000-500,000", "> $500,000", NA)
+
+salaries <- latam %>%
+  select(salary = `What is your current yearly compensation (approximate $USD)?`) %>% 
+  mutate(salary = factor(salary, levels = salary_levels))
+
+p1 <- salaries %>%
+  drop_na() %>%
+  ggplot(aes(salary))+ geom_histogram(stat = "count") + 
+  theme_classic() + theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  labs(x = "Salary Band")
+
+
+### Aggregate ranges to mreduce number of trhesholds
+salary100 <- c("100,000-124,999","125,000-149,999", "150,000-199,999",
+                "200,000-249,999", "250,000-299,999", "300,000-500,000", "> $500,000")
+salary50_100 <- c("50,000-59,999","60,000-69,999", "70,000-79,999",
+                  "80,000-89,999", "90,000-99,999")
+salary1_3 <- c("1,000-1,999", "2,000-2,999")
+salary3_10 <- c("3,000-3,999", "4,000-4,999", "5,000-7,499", "7,500-9,999")
+salary10_20 <- c("10,000-14,999", "15,000-19,999")
+salary20_30 <- c("20,000-24,999", "25,000-29,999")
+salary30_50 <- c("30,000-39,999","40,000-49,999")
+
+# Get the difference of sets to avoid recoding
+salary_diff <- setdiff(salary_levels, c(salary100, salary50_100, salary1_3, salary3_10,
+                                        salary10_20, salary20_30, salary30_50))
+
+#create new temporary table with new salaries
+salaries_new <- latam %>%
+  select(salary = `What is your current yearly compensation (approximate $USD)?`)
+
+salaries_new$salary_new <- case_when(
+  salaries_new$salary %in% salary100 ~ "> 100,000",
+  salaries_new$salary %in% salary50_100 ~ "50,000-99,999",
+  salaries_new$salary %in% salary30_50 ~ "30,000-49,999",
+  salaries_new$salary %in% salary20_30 ~ "20,000-29,999",
+  salaries_new$salary %in% salary10_20 ~ "10,000-19,999",
+  salaries_new$salary %in% salary3_10 ~ "3,000-9,999",
+  salaries_new$salary %in% salary1_3 ~ "1,000-2,999",
+  salaries_new$salary %in% salary_diff ~ salaries_new$salary)
+
+# recode and reorder the levels of slary categories
+salary_new_levels <- c("$0-999", "1,000-2,999", "3,000-9,999","10,000-19,999",
+                       "20,000-29,999", "30,000-49,999",
+                   "50,000-99,999", "> 100,000", NA)
+
+salaries_new$salary_new <- factor(salaries_new$salary_new,
+                                  levels = salary_new_levels)
+
+p2 <- salaries_new %>% 
+  drop_na() %>%
+  ggplot(aes(salary_new))+ geom_histogram(stat = "count") + 
+  theme_classic() + theme(axis.text.x = element_text(angle = 60, hjust = 1)) + 
+  labs(x = "Salary Band")
+
+cowplot::plot_grid(p1, p2)
+  
+```
+
+
+Basically, the ordinal regression simply estimates the threshold values between the different categories represent the log of odds of a given salary category. If we assume income is a continuous scale, then the different categories are defined and delimited by these thresholds. On the plot above, we see how by lumping together categories, we reduce the number of thresholds the model needs to estimate, making it easier for the MCMC chains to converge. For more details on what the cumulative model is doing and how to fit it as we've done in this report, see [the recent publication](https://psyarxiv.com/x8swp/) by Paul Bürkner.
+
+## Prior Predictive Checks
+
+The way we will build this model will be in a sequential fashion. We begin by building a joint probabilty distribution of all the outcomes and unknowns, on which we'll condition/marginalize to better understand the different relationships and effects that arise between all the components of our model. This joint probabilty distribution will then be decomposed into the likelihood and the prior distributions that we decide to include in the model. Once we have this defined, we can sample from the prior predictive distribution to test our assumptions and callibrate our model. Then once our knowledge has been properly encoded and we know the computer is providing reliable results that agree withour assumptions, we use Bayes rule to compute the posterior distribution i.e. the probability of our unknown parameters.
+
+Now that we have the joint distribution decomposed, we need to encode and configure our priors, i.e., we need to determine what possible outcomes are in agreement to what we believe about the current state of affairs of DS and ML in Latin America. This is a broad topic and there is plenty of information around that simply makes any model insufficient to grasp the entire data generating process of this subset population of interest. The likelihood function used for this model is a cumulative distribution with logistic link. We assign a probability distribution (prior) to each of the parameters that we wish to determine, in such a way that we broadly yet informatively introduce our prior beliefs about the parameters that constitute our model. For more information on how to build a robust bayesian workflow, see here (ref to stan, bayesian, betancourt).
+
+The variables that we'll include in this model are country, experience in ML (years), education level, and gender. We will then explore the marginal plots of variable to see how the probabilty of a specific salary interval changes by category.
+
+
+```{r prior_predictive}
+## Select specific potential covariates for the model
+latam %>%
+  select(country = `In which country do you currently reside?`,
+         ml_years = `For how many years have you used machine learning methods?`,
+         age = `What is your age (# years)?`,
+         gender =`What is your gender? - Selected Choice`,
+         company_size = `What is the size of the company where you are employed?`,
+         employer = `Does your current employer incorporate machine learning methods into their business?`,
+         degree = `What is the highest level of formal education that you have attained or plan to attain within the next 2 years?`) %>%
+  bind_cols(select(prog_lang, Python, R),
+            titles, salaries_new) -> latam_clean
+
+# Clean degree variable
+latam_clean$degree_clean <- doBy::recodeVar(latam_clean$degree, src = unique(latam_clean$degree),
+                                      tgt = c("bachelor", "master", "professional", "phd",
+                                              "high school", "some college", "no answer", "no answer"))
+
+# recode and reorder the levels of education
+latam_clean$degree_clean <- factor(latam_clean$degree_clean, ordered = T,
+                             levels = rev(c("phd", "master", "bachelor", "professional",
+                                            "some college", "high school", "no answer")), labels = 1:7)
+
+# Clean Experience
+latam_clean %>% 
+  mutate(experience = if_else(is.na(ml_years), "none", ml_years))  -> latam_clean
+  
+# recode and reorder the levels of experience years
+latam_clean$experience <- factor(latam_clean$experience, ordered = T,
+                               levels = c("none", "< 1 years", "1-2 years", "2-3 years",
+                                          "3-4 years", "4-5 years", "5-10 years", "10-15 years", 
+                                          "20+ years"),
+                               labels = 1:9)
+
+# Clean gender variable
+latam_clean$gender <- factor(latam_clean$gender, levels = c("Female", "Male"))
+
+# Because we are fitting an ordinal model we need to recode the salary
+# intervals accordingly, so that they are ordered from lowest to highest
+latam_clean$salary_new <- factor(latam_clean$salary_new, labels = 1:8, ordered = T)
+# Drop unreported salaries and unspecified genders.
+latam_clean <- latam_clean %>%
+  filter(gender %in% c("Male", "Female"),
+         !is.na(salary_new))
+
+# Set the priors on the thresholds of the Ordinal model
+prior0 <- c(prior(normal(-2,0.5), class = "Intercept", coef = "1"),
+            prior(normal(-1,0.5), class = "Intercept", coef = "2"),
+            prior(normal(-0.5,0.5), class = "Intercept", coef = "3"),
+            prior(normal(0,0.5), class = "Intercept", coef = "4"),
+            prior(normal(1,0.5), class = "Intercept", coef = "5"),
+            prior(normal(1.5,0.5), class = "Intercept", coef = "6"),
+            prior(normal(2,0.5), class = "Intercept", coef = "7"))
+
+# priors of monotonic effects
+mo_prior <- c(prior(normal(0.4, 0.5), class = "b", coef = "modegree_clean"),
+              prior(normal(0.4, 0.5), class = "b", coef = "moexperience"))
+
+# priors for other coefficients
+b_prior <- prior(normal(0, 0.5), class = "b")
+
+# prior_m0 <- brm(salary_new ~ country + gender + mo(experience) + mo(degree_clean),
+#           prior = c(prior0, mo_prior, b_prior), save_model = "prior_pd.stan",
+#           family = cumulative("logit"), data = latam_clean, sample_prior = "only")
+
+# saveRDS(prior_m0, "prior_model.rds")
+# load fitted model
+prior_m0 <- readRDS("prior_model.rds")
+Pr1 <- posterior_linpred(prior_m0, transform = TRUE)
+boxplot(apply(Pr1, c(1,3), FUN = mean), pch = ".", las = 1)
+marg_effs0 <- marginal_effects(prior_m0, categorical = T) 
+
+```
+
+The boxplot above displays the probabilities for each of the income categories that are in our data. From left to right, we are assuming that for a LatinX data scientist or ML practitioner, falling on the lower spectrum of salaries is unlikely. We assume that the likeliest salary range is between the highest interval, this is because of our monotonically increasing effects that we introduced for experience and education level. In conclusion, our prior beliefs is that the more experience and the higher the education level, the higher the salaries.
+
+Let's now look at the marginal plots from this prior predictive distribution for the other covariates to see how the probabilities of falling on each of the income intervals varies. Most of our variables are categorical, therefore, this will only represent shifts in the "intercept" or thresholds. 
+
+We begin with country, since it is of our interest to determine salary ranges within the region. We think that there should not be tremendous differences between Latin American countries in terms of salary, therefore, we assign a weakly informative prior on each country's coefficient.
+
+```{r prior_countries}
+ggplot(marg_effs0$`country:cats__`,
+             aes(country, estimate__, ymin = lower__, ymax = upper__,
+                 color = cats__)) + geom_pointrange(position = position_dodge(width = 0.5)) + 
+  theme_classic() + facet_wrap(~ country, scales = "free") +
+  labs(y = "Probability", x = "Country", title = "Prior Predictive Distribution",
+       subtitle = "Marginal Effects - Country") + 
+  scale_color_discrete(name = "Annual Income USD",
+                       labels = levels(salaries_new$salary_new))
+
+```
+
+On the marginal plots above, we see that the distribution of incomes is relatively similar across the region. Here, our prior knowledge about the DS/ML job market in Latin America reflects that salaries for data scientists will not be extreme. In fact, for each country, we assign the same normal latent distribution of compensation. Once we condition on the true observations to inform our beliefs on the current parameters’ values and probabilities, then we'll see how off our assumptions were. 
+
+Next, now does the level of education of the participants will affect salary?
+
+To properly handle this variable, we assume that a higher level of education will indeed lead to higher salary range. Therefore, we treat the relationship between education and income as monotonically, increasing. Fortunately `brms` allows us to easily do this and you may read the vignette referenced above to understand this better.
+
+
+```{r prior_degree}
+ggplot(marg_effs0$`degree_clean:cats__`,
+             aes(degree_clean, estimate__, ymin = lower__, ymax = upper__,
+                 color = cats__)) + geom_pointrange(position = position_dodge(width = 0.5)) + 
+  theme_classic() + 
+  labs(y = "Probability", x = "Degree", title = "Prior Predictive Distribution",
+       subtitle = "Marginal Effects - Education") + 
+  scale_x_discrete(labels = str_wrap(rev(c("phd", "master", "bachelor", "professional",
+                                  "some college", "high school", "no answer")),10)) + 
+  scale_color_discrete(name = "Annual Income USD",
+                       labels = levels(salaries_new$salary_new))
+```
+
+As seen in the plot, the probability of a higher salary increases with education, and for lower salaries, decreases. Indeed, we have encoded our beliefs about the advantages of higher levels of education in such a way that the more education, the more likely it is to achieve a higher salary. However, and this is the reason why this question is interesting, there is a big discussion on whether Data Scientists and ML practitioners should hold a PhD, or even a Master's. So, to test this assumption we have set a prior that represents this monotonically increasing relationship between education and income. 
+
+What about gender and salary?
+
+Again, we have assumed that there are no differences between genders in terms of salaries, across countries and at various degrees of education. Therefore, we again assign a weakly informative prior to allow any extreme behavior in the data, while at the same time regularizing our estimation according to our prior beliefs. For simplicity and lack of data we have limited our analysis to the two most frequent gender in the dataset, i.e., Male and Female.
+
+
+```{r prior_gender}
+
+ggplot(marg_effs0$`gender:cats__`,
+             aes(cats__, estimate__, ymin = lower__, ymax = upper__,
+                 color = gender)) + geom_pointrange(position = position_dodge(width = 0.5)) + 
+  theme_classic() + 
+  labs(y = "Probability", x = "Annual Salary USD", title = "Prior Predictive Distribution",
+       subtitle = "Marginal Effects - Gender") + 
+  scale_x_discrete(labels = levels(salaries_new$salary_new)) + 
+  scale_color_brewer(name = "", palette = "Set1",
+                       labels = levels(latam_clean$gender))
+```
+
+This marginal plot of gender against income level suggests that there is a difference between Male and Females in the Data Science community in Latin America. Again, this is the result of prior simulations and we have not yet conditioned on the data to update our parameters and beliefs via the posterior distribution.
+
+Finally, how are the probabilities of the different salary ranges affected by experience in ML?
+
+```{r prior_experience}
+ggplot(marg_effs0$`experience:cats__`,
+             aes(experience, estimate__, ymin = lower__, ymax = upper__,
+                 color = cats__)) + geom_pointrange(position = position_dodge(width = 0.5)) + 
+  theme_classic() + 
+  labs(y = "Probability", x = "Years of Experience in ML", 
+       title = "Prior Predictive Distribution ",
+       subtitle = "Marginal Effects - Experience") + 
+  scale_x_discrete(labels =c("none", "< 1 years", "1-2 years", "2-3 years",
+                                          "3-4 years", "4-5 years", "5-10 years", "10-15 years", 
+                                          "20+ years")) + 
+  scale_color_brewer(name = "", palette = "Set1",
+                       labels = levels(salaries_new$salary_new))
+
+
+
+```
+
+Just as we did with education level, we have introduced this variable as a monotonically increasing effect, something in much alignment to what newcomers to the field believe. This type of assumptions will be put to the test, once we condition on the data to compute and sample from the posterior distribution. 
+
+## Posterior Distribution
+
+Now that we have tried and tested our assumptions about the relationships of different demographic covariates with the income level, we are now ready to put our model to the test. This is the most important part, since now we get to confront our prior beliefs against actual data.
+
+This process simply corresponds to applying Bayes rule to get the posterior probability of the different parameters of our model, given the data and the covariates.
+
+
+```{r posterior_distribution}
+# post_m0 <- brm(salary_new ~ country + gender + mo(experience) + mo(degree_clean) ,
+#           prior = c(prior0, mo_prior, b_prior), save_model = "posterior.stan",
+#           family = cumulative("logit"), data = latam_clean)
+
+# To avoid runnig the model several times during experimentation, 
+# we have saved them for simplicity.
+
+# saveRDS(post_m0, "posterior_model.rds")
+post_m0 <- readRDS("posterior_model.rds")
+
+Pr2 <- posterior_linpred(post_m0, transform = TRUE)
+boxplot(apply(Pr2, c(1,3), FUN = mean), pch = ".", las = 1)
+marg_effs1 <- marginal_effects(post_m0, categorical = T) 
+
+
+```
+
+By looking at the distribution of probabilities on the posterior, here we see that indeed our prior beliefs have been contradicted by the data. Now the most probable salary range is in close to the 10k to 30k USD of yearly compensation. Let see what happened to our other variables by studying their respective marginal posterior distributions.
+
+```{r posterior_country}
+
+ggplot(marg_effs1$`country:cats__`,
+             aes(country, estimate__, ymin = lower__, ymax = upper__,
+                 color = cats__)) + geom_pointrange(position = position_dodge(width = 0.5)) + 
+  theme_classic() + 
+  labs(y = "Probability", x = "Country", title = "Posterior Distribution - Country",
+       subtitle = "Marginal Effects - Country") + 
+  scale_color_discrete(name = "Annual Income USD",
+                       labels = levels(salaries_new$salary_new))
+
+
+```
+
+We see that the probability of falling on the lowest salary range is in Peru, but considering the small amount of participants on the survey the credible intervals are very wide, suggesting a high degree of uncertainty around these probabilities. Overall, there does not seem to be any extreme pattern in the differences between these countries in terms of salaries.
+
+```{r post_degree}
+
+ggplot(marg_effs1$`degree_clean:cats__`,
+             aes(degree_clean, estimate__, ymin = lower__, ymax = upper__,
+                 color = cats__)) + geom_pointrange(position = position_dodge(width = 0.5)) + 
+  theme_classic() + 
+  labs(y = "Probability", x = "Degree", title = "Posterior Distribution",
+       subtitle = "Marginal Effects - Education") + 
+  scale_x_discrete(labels = str_wrap(rev(c("phd", "master", "bachelor", "professional",
+                                  "some college", "high school", "no answer")),10)) + 
+  scale_color_discrete(name = "Annual Income USD",
+                       labels = levels(salaries_new$salary_new)) +
+  theme(axis.text = element_text(size =10))
+
+
+```
+
+Our assumptions about higher salaries for higher educational levels seems to have been debunked by the regional data. Indeed, having a more advanced degree does seem to improve on the odds of having a higher salary in the region. This is a very interesting result, now new people wanting to get into the field can actually have a little more information regarding their decision say from this particular dataset that a higher degree may lead to a better salary. 
+
+
+```{r post_gender}
+
+ggplot(marg_effs1$`gender:cats__`,
+             aes(cats__, estimate__, ymin = lower__, ymax = upper__,
+                 color = gender)) + geom_pointrange(position = position_dodge(width = 0.5)) + 
+  theme_classic() + 
+  labs(y = "Probability", x = "", title = "Posterior Distribution",
+       subtitle = "Marginal Effects - Gender") + 
+  scale_x_discrete(labels = levels(salaries_new$salary_new)) + 
+  scale_color_brewer(name = "", palette = "Set1",
+                       labels = levels(latam_clean$gender)) +
+  theme(axis.text = element_text(size = 10),
+        axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+We see that after seeing the data, the differences in salaries between men and women are not that great. Yes, there are salary bands on which men have a higher probability, however, the uncertainty around these mean average values is such that the female probability is included. Additionally, recall that the number of women in the survey for this particular subset are but a small fraction of the population. Therefore, the difference in salaries is not the actual issue but instead the number of women in the field.
+
+```{r post_experience}
+ggplot(marg_effs1$`experience:cats__`,
+             aes(experience, estimate__, ymin = lower__, ymax = upper__,
+                 color = cats__)) + geom_pointrange(position = position_dodge(width = 0.5)) + 
+  theme_classic() + 
+  labs(y = "Probability", x = "Years of Experience in ML", 
+       title = "Prior Predictive Distribution",
+       subtitle = "Marginal Effects - Experience") + 
+  scale_x_discrete(labels =c("none", "< 1 years", "1-2 years", "2-3 years",
+                                          "3-4 years", "4-5 years", "5-10 years", "10-15 years", 
+                                          "20+ years")) + 
+  scale_color_discrete(name = "",
+                       labels = levels(salaries_new$salary_new))
+```
+
+Just as what happened with the monotonic effect for education level, we do see that being involved in ML for longer does lead to higher salaries. Therefore, us assuming this monotonically increasing behavior for this factor is in agreement to what the data observed is telling us. However, note that the credible intervals of these probabilities increase for each additional level of experience. This simply reflects the uncertainty around the inferences we are making about higher salaries for more experience.
+
+## Comments and Conclusions
+
+The Latin American region shows a promising future for potential investors and education. It would be very interesting to see Kaggle develop region- or even country-specific challenges to motivate newcomers and find hidden talent among this highly capable and young workforce. Being a region with such a diverse landscape of business problems and markets, moving towards a more data-driven informed economy may lead to better competencies with the rest of the world. This is in fact a young market that will only continue to grow as the access to such technologies improves and as investors discover new business opportunities in an up and coming workforce like the one we analyzed in this survey.
+
+Overall, the region seems to behave pretty much as the rest of the world, at least given these data from this subsample of the data science population. We vaguely investigated what drives the different salary ranges in the region and we found that generally, higher education level does not reliably inform whether one can expect a higher salary. The small to negligible increase in the different categories probabilities is not the best proxy to assess if the investment in a higher education will indeed lead to higher paying jobs.
+
+We also analyzed the relationship between the years of experience of the Latin American participants and we found that there is a positive, increasing monotonic effect for the years of experience using Machine Learning with the salary interval, confirming a fact that seems to be the norm across professions and disciplines.
+
+We also tried to determine the salary or in our case, the probability of falling in a specific salary category, by gender in the region. From our results, we did not find big differences between males and females in regard to salaries, the credible intervals from both groups at all levels of salary were overlapping, which does not prove to be a reliable result. The larger number of males in the survey generally does not give us a very good idea of the actual differences. Plus, our methods fall short and more advanced techniques like Multilevel Regression and Post -stratification (MRP) may be more powerful to analyze survey data in general, more information about MRP [here](http://mc-stan.org/rstanarm/articles/mrp.html).
+
+## Potential Improvements of this analysis
+
+- Introduce MRP to more accurately make inferences about the estimates of the worldwide population. 
+- Compare different income levels by region of the world
+- Introduce more variables into the model that may be of interest. Perhaps use interaction terms and further groupings.
+- Generalize the analysis to other regions and eventually build a more robust model for the entire survey participants.
+- Try additional models and compare the different hypothesis made
+
+
+# References
+
+1. Bürkner, P., & Charpentier, E. (2018, November 2). Modeling Monotonic Effects of Ordinal Predictors in Bayesian Regression Models. https://doi.org/10.31234/osf.io/9qkhj
+2. Bürkner, P., & Vuorre, M. (2018, February 28). Ordinal Regression Models in Psychology: A Tutorial. https://doi.org/10.31234/osf.io/x8swp
+3. Ng, A. [Medium blog post](https://medium.com/@andrewng/ai-in-latin-america-announcing-our-first-international-office-in-colombia-ac4e203c1564)
+4. Kruschke, John K. Doing Bayesian data analysis : a tutorial with R, JAGS, and Stan / John K. Kruschke. – 2E [edition].
+ISBN 978-0-12-405888-0
+5.Stadler, K. [Blog post: Bayesian Ordinal Regression with Random Effects Using brms](https://kevinstadler.github.io/blog/bayesian-ordinal-regression-with-random-effects-using-brms/)
