@@ -3,3 +3,6 @@
 .Rhistory
 data/
 *cache/
+docs/
+*_files
+rsconnnect/
