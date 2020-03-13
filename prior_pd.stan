@@ -22,21 +22,6 @@ functions {
      }
      return log(p);
    }
-
-  /* compute monotonic effects
-   * Args:
-   *   scale: a simplex parameter
-   *   i: index to sum over the simplex
-   * Returns:
-   *   a scalar between 0 and 1
-   */
-  real mo(vector scale, int i) {
-    if (i == 0) {
-      return 0;
-    } else {
-      return rows(scale) * sum(scale[1:i]);
-    }
-  }
 }
 data {
   int<lower=1> N;  // number of observations
@@ -44,15 +29,6 @@ data {
   int Y[N];  // response variable
   int<lower=1> K;  // number of population-level effects
   matrix[N, K] X;  // population-level design matrix
-  int<lower=1> Ksp;  // number of special effects terms
-  int<lower=1> Imo;  // number of monotonic variables
-  int<lower=2> Jmo[Imo];  // length of simplexes
-  // monotonic variables
-  int Xmo_1[N];
-  int Xmo_2[N];
-  // prior concentration of monotonic simplexes
-  vector[Jmo[1]] con_simo_1;
-  vector[Jmo[2]] con_simo_2;
   real<lower=0> disc;  // discrimination parameters
   int prior_only;  // should the likelihood be ignored?
 }
@@ -69,21 +45,12 @@ parameters {
   vector[Kc] b;  // population-level effects
   // temporary thresholds for centered predictors
   ordered[ncat - 1] Intercept;
-  // special effects coefficients
-  vector[Ksp] bsp;
-  // simplexes of monotonic effects
-  simplex[Jmo[1]] simo_1;
-  simplex[Jmo[2]] simo_2;
 }
 transformed parameters {
 }
 model {
   // initialize linear predictor term
   vector[N] mu = Xc * b;
-  for (n in 1:N) {
-    // add more terms to the linear predictor
-    mu[n] += (bsp[1]) * mo(simo_1, Xmo_1[n]) + (bsp[2]) * mo(simo_2, Xmo_2[n]);
-  }
   // priors including all constants
   target += normal_lpdf(b | 0, 0.5);
   target += normal_lpdf(Intercept[1] | -2, 0.5);
@@ -93,10 +60,6 @@ model {
   target += normal_lpdf(Intercept[5] | 1, 0.5);
   target += normal_lpdf(Intercept[6] | 1.5, 0.5);
   target += normal_lpdf(Intercept[7] | 2, 0.5);
-  target += normal_lpdf(bsp[1] | 0.4, 0.5);
-  target += normal_lpdf(bsp[2] | 0.4, 0.5);
-  target += dirichlet_lpdf(simo_1 | con_simo_1);
-  target += dirichlet_lpdf(simo_2 | con_simo_2);
   // likelihood including all constants
   if (!prior_only) {
     for (n in 1:N) {
